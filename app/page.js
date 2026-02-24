@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 
 export default function Home() {
   const canvasRef = useRef(null);
+  const containerRef = useRef(null);
   const [started, setStarted] = useState(false);
   const [messages, setMessages] = useState([]);
+  const [isMobile, setIsMobile] = useState(false);
   
   const allMessages = [
     { text: "Hey you", emoji: "💕" },
@@ -20,6 +22,17 @@ export default function Home() {
     { text: "", emoji: "🎂" }
   ];
 
+  // Detect mobile device
+  useEffect(() => {
+    const checkMobile = () => {
+      const mobile = window.innerWidth <= 768 || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      setIsMobile(mobile);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -28,17 +41,84 @@ export default function Home() {
     let animationId;
     let treeProgress = 0;
     let hearts = [];
+    let floatingHearts = [];
     let particles = [];
+    let treeHearts = [];
     
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = rect.height + 'px';
+      ctx.scale(dpr, dpr);
     };
     
     resize();
     window.addEventListener('resize', resize);
     
-    class Heart {
+    // Floating heart that rises from bottom
+    class FloatingHeart {
+      constructor() {
+        const rect = canvas.parentElement.getBoundingClientRect();
+        this.x = Math.random() * rect.width;
+        this.y = rect.height + 20;
+        this.size = Math.random() * 15 + 8;
+        this.speed = Math.random() * 1.5 + 0.5;
+        this.wobble = Math.random() * Math.PI * 2;
+        this.wobbleSpeed = Math.random() * 0.02 + 0.01;
+        this.opacity = Math.random() * 0.5 + 0.3;
+        this.colors = ['#ff6b9d', '#ff8e8e', '#ffd93d', '#ff6b6b', '#ee5a6f', '#ff9ff3', '#feca57', '#ffb6c1', '#ff69b4'];
+        this.color = this.colors[Math.floor(Math.random() * this.colors.length)];
+        this.rotation = Math.random() * Math.PI * 2;
+        this.rotationSpeed = (Math.random() - 0.5) * 0.02;
+      }
+      
+      update() {
+        this.y -= this.speed;
+        this.wobble += this.wobbleSpeed;
+        this.x += Math.sin(this.wobble) * 0.5;
+        this.rotation += this.rotationSpeed;
+        
+        // Fade out near top
+        const rect = canvas.parentElement.getBoundingClientRect();
+        if (this.y < rect.height * 0.2) {
+          this.opacity -= 0.01;
+        }
+      }
+      
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+        ctx.globalAlpha = Math.max(0, this.opacity);
+        ctx.fillStyle = this.color;
+        
+        // Draw heart shape
+        ctx.beginPath();
+        const s = this.size;
+        ctx.moveTo(0, -s * 0.3);
+        ctx.bezierCurveTo(-s * 0.5, -s * 0.8, -s, -s * 0.3, 0, s * 0.8);
+        ctx.bezierCurveTo(s, -s * 0.3, s * 0.5, -s * 0.8, 0, -s * 0.3);
+        ctx.fill();
+        
+        // Add glow effect
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 10;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        ctx.restore();
+      }
+      
+      isOffScreen() {
+        return this.y < -50 || this.opacity <= 0;
+      }
+    }
+    
+    // Tree canopy heart
+    class TreeHeart {
       constructor(x, y, size, color, targetX, targetY) {
         this.x = x;
         this.y = y;
@@ -51,6 +131,7 @@ export default function Home() {
         this.scale = 0;
         this.targetScale = 1;
         this.alpha = 1;
+        this.floatOffset = Math.random() * Math.PI * 2;
       }
       
       update() {
@@ -63,6 +144,9 @@ export default function Home() {
         if (Math.abs(dx) < 5 && Math.abs(dy) < 5) {
           this.vx *= 0.8;
           this.vy *= 0.8;
+          // Gentle floating when settled
+          this.floatOffset += 0.02;
+          this.y += Math.sin(this.floatOffset) * 0.3;
         }
         
         if (this.scale < this.targetScale) {
@@ -80,7 +164,7 @@ export default function Home() {
         ctx.beginPath();
         const s = this.size;
         ctx.moveTo(0, -s * 0.3);
-        ctx.bezierCurveTo(-s * 0.5, -s * 0.8, -s, -s * 0.3, 0, s);
+        ctx.bezierCurveTo(-s * 0.5, -s * 0.8, -s, -s * 0.3, 0, s * 0.8);
         ctx.bezierCurveTo(s, -s * 0.3, s * 0.5, -s * 0.8, 0, -s * 0.3);
         ctx.fill();
         
@@ -88,27 +172,28 @@ export default function Home() {
       }
     }
     
+    // Explosion particle
     class Particle {
       constructor(x, y, color) {
         this.x = x;
         this.y = y;
-        this.vx = (Math.random() - 0.5) * 4;
-        this.vy = (Math.random() - 0.5) * 4;
+        this.vx = (Math.random() - 0.5) * 6;
+        this.vy = (Math.random() - 0.5) * 6;
         this.life = 1;
         this.color = color;
-        this.size = Math.random() * 4 + 2;
+        this.size = Math.random() * 5 + 2;
       }
       
       update() {
         this.x += this.vx;
         this.y += this.vy;
-        this.vy += 0.1;
-        this.life -= 0.02;
+        this.vy += 0.15;
+        this.life -= 0.015;
       }
       
       draw() {
         ctx.save();
-        ctx.globalAlpha = this.life;
+        ctx.globalAlpha = Math.max(0, this.life);
         ctx.fillStyle = this.color;
         ctx.beginPath();
         ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
@@ -123,15 +208,15 @@ export default function Home() {
       const endX = x + Math.cos(angle) * length;
       const endY = y + Math.sin(angle) * length;
       
-      const progress = Math.min(1, Math.max(0, (treeProgress - depth * 0.1) / 0.3));
+      const progress = Math.min(1, Math.max(0, (treeProgress - depth * 0.08) / 0.25));
       
       if (progress > 0) {
         const currentEndX = x + (endX - x) * progress;
         const currentEndY = y + (endY - y) * progress;
         
-        const r = Math.floor(255 - depth * 10);
-        const g = Math.floor(182 - depth * 5);
-        const b = Math.floor(193 - depth * 3);
+        const r = Math.floor(255 - depth * 8);
+        const g = Math.floor(182 - depth * 4);
+        const b = Math.floor(193 - depth * 2);
         ctx.strokeStyle = `rgb(${r}, ${g}, ${b})`;
         ctx.lineWidth = width * progress;
         ctx.lineCap = 'round';
@@ -141,251 +226,95 @@ export default function Home() {
         ctx.lineTo(currentEndX, currentEndY);
         ctx.stroke();
         
-        if (progress > 0.8 && depth === maxDepth) {
-          const heartColors = ['#ff6b9d', '#ff8e8e', '#ffd93d', '#ff6b6b', '#ee5a6f', '#ff9ff3', '#feca57', '#ff6b9d', '#ff8e8e'];
+        // Add hearts at branch ends
+        if (progress > 0.85 && depth >= maxDepth - 1) {
+          const heartColors = ['#ff6b9d', '#ff8e8e', '#ffd93d', '#ff6b6b', '#ee5a6f', '#ff9ff3', '#feca57', '#ffb6c1'];
           const color = heartColors[Math.floor(Math.random() * heartColors.length)];
           
-          if (Math.random() < 0.4) {
-            hearts.push(new Heart(
+          if (Math.random() < 0.6) {
+            const spread = isMobile ? 40 : 60;
+            treeHearts.push(new TreeHeart(
               currentEndX,
               currentEndY,
-              Math.random() * 8 + 4,
+              Math.random() * (isMobile ? 10 : 14) + 6,
               color,
-              currentEndX + (Math.random() - 0.5) * 30,
-              currentEndY + (Math.random() - 0.5) * 30
+              currentEndX + (Math.random() - 0.5) * spread,
+              currentEndY + (Math.random() - 0.5) * spread
             ));
           }
         }
         
-        if (progress > 0.5) {
-          const branchAngle = 0.5;
-          const newLength = length * 0.7;
+        if (progress > 0.4) {
+          const branchAngle = isMobile ? 0.45 : 0.5;
+          const lengthMult = isMobile ? 0.72 : 0.7;
+          const newLength = length * lengthMult;
           const newWidth = width * 0.7;
           
           drawTreeBranch(currentEndX, currentEndY, angle - branchAngle, newLength, newWidth, depth + 1, maxDepth);
           drawTreeBranch(currentEndX, currentEndY, angle + branchAngle, newLength, newWidth, depth + 1, maxDepth);
+          
+          // Extra branch for fullness on higher depths
+          if (depth < 3 && !isMobile) {
+            drawTreeBranch(currentEndX, currentEndY, angle, newLength * 0.8, newWidth * 0.8, depth + 2, maxDepth);
+          }
         }
       }
     }
     
     function drawGround() {
+      const rect = canvas.parentElement.getBoundingClientRect();
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(0, canvas.height - 50);
-      ctx.lineTo(canvas.width, canvas.height - 50);
+      ctx.moveTo(0, rect.height - (isMobile ? 30 : 50));
+      ctx.lineTo(rect.width, rect.height - (isMobile ? 30 : 50));
       ctx.stroke();
     }
     
+    let frameCount = 0;
+    
     function animate() {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const rect = canvas.parentElement.getBoundingClientRect();
+      
+      // Trail effect
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+      ctx.fillRect(0, 0, rect.width, rect.height);
       
       drawGround();
       
       if (started) {
-        if (treeProgress < 3) {
-          treeProgress += 0.015;
+        // Slower, more majestic growth
+        if (treeProgress < 4) {
+          treeProgress += 0.012;
         }
         
-        const treeX = canvas.width * 0.65;
-        const treeY = canvas.height - 50;
+        // Bigger tree positioning
+        const treeX = isMobile ? rect.width * 0.5 : rect.width * 0.6;
+        const treeY = rect.height - (isMobile ? 30 : 50);
+        const initialLength = isMobile ? 100 : 160;
+        const initialWidth = isMobile ? 10 : 16;
+        const maxDepth = isMobile ? 8 : 10;
         
-        drawTreeBranch(treeX, treeY, -Math.PI / 2, 120, 12, 0, 9);
+        drawTreeBranch(treeX, treeY, -Math.PI / 2, initialLength, initialWidth, 0, maxDepth);
         
-        hearts.forEach(heart => {
+        // Update and draw tree hearts
+        treeHearts.forEach(heart => {
           heart.update();
           heart.draw();
         });
         
-        particles.forEach((particle, index) => {
-          particle.update();
-          particle.draw();
-          if (particle.life <= 0) particles.splice(index, 1);
+        // Spawn floating hearts from bottom
+        frameCount++;
+        const spawnRate = isMobile ? 40 : 25;
+        if (frameCount % spawnRate === 0) {
+          floatingHearts.push(new FloatingHeart());
+        }
+        
+        // Update and draw floating hearts
+        floatingHearts = floatingHearts.filter(heart => {
+          heart.update();
+          heart.draw();
+          return !heart.isOffScreen();
         });
-      }
-      
-      animationId = requestAnimationFrame(animate);
-    }
-    
-    animate();
-    
-    return () => {
-      window.removeEventListener('resize', resize);
-      cancelAnimationFrame(animationId);
-    };
-  }, [started]);
-  
-  useEffect(() => {
-    if (!started) return;
-    
-    let index = 0;
-    const typeNextMessage = () => {
-      if (index >= allMessages.length) return;
-      
-      const msg = allMessages[index];
-      let charIndex = 0;
-      const fullText = msg.text;
-      
-      const interval = setInterval(() => {
-        if (charIndex <= fullText.length) {
-          setMessages(prev => {
-            const newMessages = [...prev];
-            newMessages[index] = {
-              text: fullText.slice(0, charIndex),
-              emoji: msg.emoji,
-              showCursor: charIndex < fullText.length
-            };
-            return newMessages;
-          });
-          charIndex++;
-        } else {
-          clearInterval(interval);
-          index++;
-          setTimeout(typeNextMessage, 600);
-        }
-      }, 50);
-    };
-    
-    const timeout = setTimeout(typeNextMessage, 1000);
-    return () => clearTimeout(timeout);
-  }, [started]);
-  
-  const handleStart = () => {
-    setStarted(true);
-  };
-  
-  return (
-    <div style={{ position: 'relative', width: '100vw', height: '100vh', background: '#000', overflow: 'hidden' }}>
-      <canvas 
-        ref={canvasRef} 
-        style={{ 
-          display: 'block',
-          position: 'absolute',
-          top: 0,
-          left: 0
-        }} 
-      />
-      
-      {!started && (
-        <div 
-          onClick={handleStart}
-          style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            textAlign: 'center',
-            color: '#fff',
-            cursor: 'pointer',
-            zIndex: 10,
-            userSelect: 'none'
-          }}
-        >
-          <div style={{
-            fontSize: '60px',
-            animation: 'pulse 1.5s ease-in-out infinite',
-            marginBottom: '10px'
-          }}>
-            🤍
-          </div>
-          <div style={{
-            fontSize: '18px',
-            color: '#fff',
-            opacity: 0.9,
-            letterSpacing: '2px',
-            marginBottom: '5px'
-          }}>
-            Click Me :)
-          </div>
-          <div style={{
-            fontSize: '14px',
-            color: '#888',
-            letterSpacing: '1px'
-          }}>
-            Birthday Queen !
-          </div>
-        </div>
-      )}
-      
-      {started && (
-        <div style={{
-          position: 'absolute',
-          left: '50px',
-          top: '50%',
-          transform: 'translateY(-50%)',
-          color: '#fff',
-          fontSize: '16px',
-          lineHeight: '1.8',
-          zIndex: 5,
-          maxWidth: '350px',
-          fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
-        }}>
-          {messages.map((msg, idx) => (
-            <div 
-              key={idx} 
-              style={{ 
-                opacity: msg ? 1 : 0,
-                transition: 'opacity 0.3s',
-                margin: '5px 0',
-                minHeight: '24px'
-              }}
-            >
-              {msg && (
-                <>
-                  <span>{msg.text}</span>
-                  {msg.text && msg.emoji && (
-                    <span style={{
-                      color: '#ff6b9d',
-                      display: 'inline-block',
-                      animation: 'heartbeat 1s ease-in-out infinite',
-                      marginLeft: '5px'
-                    }}>
-                      {msg.emoji}
-                    </span>
-                  )}
-                  {!msg.text && msg.emoji && (
-                    <span style={{
-                      color: '#ff6b9d',
-                      display: 'inline-block',
-                      animation: 'heartbeat 1s ease-in-out infinite'
-                    }}>
-                      {msg.emoji}
-                    </span>
-                  )}
-                  {msg.showCursor && (
-                    <span style={{
-                      display: 'inline-block',
-                      width: '2px',
-                      height: '16px',
-                      background: '#fff',
-                      marginLeft: '2px',
-                      animation: 'blink 1s infinite'
-                    }} />
-                  )}
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-      
-      <style jsx global>{`
-        @keyframes pulse {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.2); }
-        }
         
-        @keyframes heartbeat {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.3); }
-        }
-        
-        @keyframes blink {
-          0%, 50% { opacity: 1; }
-          51%, 100% { opacity: 0; }
-        }
-      `}</style>
-    </div>
-  );
-}
+        //
